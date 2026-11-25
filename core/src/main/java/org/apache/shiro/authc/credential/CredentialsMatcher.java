@@ -21,6 +21,8 @@ package org.apache.shiro.authc.credential;
 import org.apache.shiro.authc.AuthenticationInfo;
 import org.apache.shiro.authc.AuthenticationToken;
 
+import java.util.Optional;
+
 
 /**
  * Interface implemented by classes that can determine if an AuthenticationToken's provided
@@ -51,4 +53,15 @@ public interface CredentialsMatcher {
      */
     boolean doCredentialsMatch(AuthenticationToken token, AuthenticationInfo info);
 
+    /**
+     * Create simulated credentials in case of a non-existent user trying to log in.
+     *
+     * <p>Implementations must make sure to use an algorithm which is also used by users, which
+     * roughly takes the same amount of time as checking a real user's AuthenticationInfo.</p>
+     * <p>They must also make sure to return AuthenticationInfo which can never be validated.</p>
+     * @return simulated AuthenticationInfo, created for non-existent users.
+     */
+    default Optional<AuthenticationInfo> createSimulatedCredentials() {
+        return Optional.empty();
+    }
 }
