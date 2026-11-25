@@ -17,3 +17,4 @@
 
 # CRLF source file: carry its changes as a binary diff so the line endings survive patch transport.
 /core/src/main/java/org/apache/shiro/realm/ldap/DefaultLdapRealm.java -diff
+/core/src/test/java/org/apache/shiro/realm/ldap/DefaultLdapRealmTest.java -diff
