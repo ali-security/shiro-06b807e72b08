@@ -20,14 +20,22 @@ package org.apache.shiro.mgt;
 
 import org.apache.shiro.SecurityUtils;
 import org.apache.shiro.UnavailableSecurityManagerException;
+import org.apache.shiro.authc.AuthenticationException;
+import org.apache.shiro.authc.AuthenticationInfo;
 import org.apache.shiro.authc.AuthenticationToken;
 import org.apache.shiro.authc.UsernamePasswordToken;
 import org.apache.shiro.config.Ini;
 import org.apache.shiro.realm.text.IniRealm;
 import org.apache.shiro.session.ExpiredSessionException;
+import org.apache.shiro.session.InvalidSessionException;
 import org.apache.shiro.session.Session;
 import org.apache.shiro.session.mgt.AbstractValidatingSessionManager;
+import org.apache.shiro.session.mgt.DefaultSessionKey;
+import org.apache.shiro.subject.PrincipalCollection;
+import org.apache.shiro.subject.SimplePrincipalCollection;
 import org.apache.shiro.subject.Subject;
+import org.apache.shiro.subject.SubjectContext;
+import org.apache.shiro.subject.support.DefaultSubjectContext;
 import org.apache.shiro.subject.support.DelegatingSubject;
 import org.apache.shiro.util.ThreadContext;
 import org.junit.After;
@@ -182,5 +190,108 @@ public class DefaultSecurityManagerTest extends AbstractSecurityManagerTest {
         AuthenticationToken token = new UsernamePasswordToken("guest", "guest");
         subject.login(token);
         assertEquals(sm, subject.getSecurityManager());
+    }
+
+    /**
+     * Restoring a Subject from a RememberMe identity over an existing (possibly attacker-fixated) session must
+     * stop that session and continue on a newly created one (session fixation protection).
+     */
+    @Test
+    public void testRememberedSubjectRegeneratesExistingSession() {
+        // an anonymous session, e.g. one whose ID was planted by an attacker:
+        Session fixated = new Subject.Builder(sm).buildSubject().getSession();
+        fixated.setAttribute("tenantId", "ACME");
+        Serializable fixatedId = fixated.getId();
+
+        sm.setRememberMeManager(new FixedRememberMeManager(new SimplePrincipalCollection("guest", "iniRealm")));
+
+        Subject remembered = new Subject.Builder(sm).sessionId(fixatedId).buildSubject();
+        assertTrue(remembered.isRemembered());
+        assertEquals("guest", remembered.getPrincipal());
+
+        Session session = remembered.getSession(false);
+        assertNotNull(session);
+        assertNotEquals("session ID must change when a subject is restored from RememberMe",
+                fixatedId, session.getId());
+        assertEquals("session attributes must survive session rotation", "ACME", session.getAttribute("tenantId"));
+
+        // the fixated session must be gone, so its ID can no longer resolve to the remembered identity:
+        try {
+            sm.getSession(new DefaultSessionKey(fixatedId));
+            fail("The fixated session should have been stopped.");
+        } catch (InvalidSessionException expected) {
+        }
+        sm.setRememberMeManager(null);
+        Subject attacker = new Subject.Builder(sm).sessionId(fixatedId).buildSubject();
+        assertNull("fixated session ID must not carry the remembered principal", attacker.getPrincipal());
+        assertNull(attacker.getSession(false));
+    }
+
+    /**
+     * Once the remembered identity is stored in the (regenerated) session, later subjects built for that session do
+     * not rotate it again.
+     */
+    @Test
+    public void testRememberedSubjectSessionNotRegeneratedOnSubsequentRequests() {
+        sm.setRememberMeManager(new FixedRememberMeManager(new SimplePrincipalCollection("guest", "iniRealm")));
+
+        Subject first = new Subject.Builder(sm).buildSubject();
+        assertTrue(first.isRemembered());
+        Serializable sessionId = first.getSession().getId();
+
+        Subject next = new Subject.Builder(sm).sessionId(sessionId).buildSubject();
+        assertEquals("guest", next.getPrincipal());
+        assertEquals(sessionId, next.getSession(false).getId());
+    }
+
+    /**
+     * Restoring a remembered identity without an existing session must not fail.
+     */
+    @Test
+    public void testRememberedSubjectWithoutExistingSession() {
+        sm.setRememberMeManager(new FixedRememberMeManager(new SimplePrincipalCollection("guest", "iniRealm")));
+
+        Subject remembered = new Subject.Builder(sm).buildSubject();
+        assertTrue(remembered.isRemembered());
+        assertEquals("guest", remembered.getPrincipal());
+        assertEquals(remembered.getPrincipals(),
+                remembered.getSession().getAttribute(DefaultSubjectContext.PRINCIPALS_SESSION_KEY));
+    }
+
+    /**
+     * A subject built over an existing session without a remembered identity keeps its session.
+     */
+    @Test
+    public void testNonRememberedSubjectKeepsExistingSession() {
+        Serializable sessionId = new Subject.Builder(sm).buildSubject().getSession().getId();
+
+        Subject subject = new Subject.Builder(sm).sessionId(sessionId).buildSubject();
+        assertFalse(subject.isRemembered());
+        assertEquals(sessionId, subject.getSession(false).getId());
+    }
+
+    private static class FixedRememberMeManager implements RememberMeManager {
+
+        private final PrincipalCollection principals;
+
+        FixedRememberMeManager(PrincipalCollection principals) {
+            this.principals = principals;
+        }
+
+        public PrincipalCollection getRememberedPrincipals(SubjectContext subjectContext) {
+            return principals;
+        }
+
+        public void forgetIdentity(SubjectContext subjectContext) {
+        }
+
+        public void onSuccessfulLogin(Subject subject, AuthenticationToken token, AuthenticationInfo info) {
+        }
+
+        public void onFailedLogin(Subject subject, AuthenticationToken token, AuthenticationException ae) {
+        }
+
+        public void onLogout(Subject subject) {
+        }
     }
 }
