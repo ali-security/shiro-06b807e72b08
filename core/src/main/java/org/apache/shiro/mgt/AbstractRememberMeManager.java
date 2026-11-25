@@ -34,6 +34,9 @@ import org.apache.shiro.util.ByteSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.Serializable;
+import java.time.Instant;
+
 /**
  * Abstract implementation of the {@code RememberMeManager} interface that handles
  * {@link #setSerializer(org.apache.shiro.io.Serializer) serialization} and
@@ -62,6 +65,46 @@ import org.slf4j.LoggerFactory;
  * @since 0.9
  */
 public abstract class AbstractRememberMeManager implements RememberMeManager {
+    /**
+     * The identity that is persisted for remember me functionality: the remembered {@link PrincipalCollection}
+     * together with the time the identity was created, allowing the remembered identity to be expired on the
+     * server side (see {@link #checkExpiration(RememberedIdentity)}).
+     */
+    protected static final class RememberedIdentity implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private final PrincipalCollection principals;
+        private final Instant creationTime;
+
+        /**
+         * Creates a new remembered identity.
+         *
+         * @param principals   the principals to remember
+         * @param creationTime the time the remembered identity was created
+         */
+        public RememberedIdentity(PrincipalCollection principals, Instant creationTime) {
+            this.principals = principals;
+            this.creationTime = creationTime;
+        }
+
+        /**
+         * Returns the remembered principals.
+         *
+         * @return the remembered principals
+         */
+        public PrincipalCollection principals() {
+            return principals;
+        }
+
+        /**
+         * Returns the time the remembered identity was created.
+         *
+         * @return the time the remembered identity was created
+         */
+        public Instant creationTime() {
+            return creationTime;
+        }
+    }
 
     /**
      * private inner log instance.
@@ -71,7 +114,7 @@ public abstract class AbstractRememberMeManager implements RememberMeManager {
     /**
      * Serializer to use for converting PrincipalCollection instances to/from byte arrays
      */
-    private Serializer<PrincipalCollection> serializer;
+    private Serializer<RememberedIdentity> serializer;
 
     /**
      * Cipher to use for encrypting/decrypting serialized byte arrays for added security
@@ -93,7 +136,7 @@ public abstract class AbstractRememberMeManager implements RememberMeManager {
      * an {@link AesCipherService} as the {@link #getCipherService() cipherService}.
      */
     public AbstractRememberMeManager() {
-        this.serializer = new DefaultSerializer<PrincipalCollection>();
+        this.serializer = new DefaultSerializer<RememberedIdentity>();
         AesCipherService cipherService = new AesCipherService();
         this.cipherService = cipherService;
         setCipherKey(cipherService.generateNewKey().getEncoded());
@@ -109,7 +152,7 @@ public abstract class AbstractRememberMeManager implements RememberMeManager {
      * @return the {@code Serializer} used to serialize and deserialize {@link PrincipalCollection} instances for
      *         persistent remember me storage.
      */
-    public Serializer<PrincipalCollection> getSerializer() {
+    public Serializer<RememberedIdentity> getSerializer() {
         return serializer;
     }
 
@@ -122,7 +165,7 @@ public abstract class AbstractRememberMeManager implements RememberMeManager {
      * @param serializer the {@code Serializer} used to serialize and deserialize {@link PrincipalCollection} instances
      *                   for persistent remember me storage.
      */
-    public void setSerializer(Serializer<PrincipalCollection> serializer) {
+    public void setSerializer(Serializer<RememberedIdentity> serializer) {
         this.serializer = serializer;
     }
 
@@ -340,14 +383,14 @@ public abstract class AbstractRememberMeManager implements RememberMeManager {
     /**
      * Converts the given principal collection the byte array that will be persisted to be 'remembered' later.
      * <p/>
-     * This implementation first {@link #serialize(org.apache.shiro.subject.PrincipalCollection) serializes} the
+     * This implementation first {@link #serialize(RememberedIdentity) serializes} the
      * principals to a byte array and then {@link #encrypt(byte[]) encrypts} that byte array.
      *
      * @param principals the {@code PrincipalCollection} to convert to a byte array
      * @return the representative byte array to be persisted for remember me functionality.
      */
     protected byte[] convertPrincipalsToBytes(PrincipalCollection principals) {
-        byte[] bytes = serialize(principals);
+        byte[] bytes = serialize(new RememberedIdentity(principals, now()));
         if (getCipherService() != null) {
             bytes = encrypt(bytes);
         }
@@ -418,7 +461,28 @@ public abstract class AbstractRememberMeManager implements RememberMeManager {
         if (getCipherService() != null) {
             bytes = decrypt(bytes);
         }
-        return deserialize(bytes);
+        RememberedIdentity remembered = deserialize(bytes);
+        return checkExpiration(remembered);
+    }
+
+    /**
+     * Checks the given remembered identity for expiration.  The default implementation does not perform any expiration
+     * checks and simply returns the principals.  Subclasses can override this method to perform expiration checks based on the
+     * {@code creationTime} property of the {@code RememberedIdentity}
+     * @param remembered identity
+     * @return PrincipalCollection
+     */
+    protected PrincipalCollection checkExpiration(RememberedIdentity remembered) {
+        return remembered.principals();
+    }
+
+    /**
+     * Returns the current time as an {@link Instant}.  Subclasses can override this method to provide a different time,
+     * such as for testing
+     * @return the current time as an {@link Instant}
+     */
+    protected Instant now() {
+        return Instant.now();
     }
 
     /**
@@ -492,7 +556,7 @@ public abstract class AbstractRememberMeManager implements RememberMeManager {
      * @param principals the principal collection to serialize to a byte array
      * @return the serialized principal collection in the form of a byte array
      */
-    protected byte[] serialize(PrincipalCollection principals) {
+    protected byte[] serialize(RememberedIdentity principals) {
         return getSerializer().serialize(principals);
     }
 
@@ -503,7 +567,7 @@ public abstract class AbstractRememberMeManager implements RememberMeManager {
      * @param serializedIdentity the previously serialized {@code PrincipalCollection} as a byte array
      * @return the de-serialized (reconstituted) {@code PrincipalCollection}
      */
-    protected PrincipalCollection deserialize(byte[] serializedIdentity) {
+    protected RememberedIdentity deserialize(byte[] serializedIdentity) {
         return getSerializer().deserialize(serializedIdentity);
     }
 
