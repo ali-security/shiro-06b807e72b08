@@ -22,6 +22,7 @@ import org.apache.shiro.SecurityUtils;
 import org.apache.shiro.authc.UsernamePasswordToken;
 import org.apache.shiro.config.Ini;
 import org.apache.shiro.config.IniSecurityManagerFactory;
+import org.apache.shiro.env.BasicIniEnvironment;
 import org.apache.shiro.mgt.DefaultSecurityManager;
 import org.apache.shiro.mgt.SecurityManager;
 import org.apache.shiro.session.Session;
@@ -153,6 +154,8 @@ public class DelegatingSubjectTest {
         //login as user1
         Subject subject = new Subject.Builder(sm).buildSubject();
         subject.login(new UsernamePasswordToken("user1", "user1"));
+        // duplicate login, test for https://github.com/apache/shiro/issues/2704
+        subject.login(new UsernamePasswordToken("user1", "user1"));
 
         assertFalse(subject.isRunAs());
         assertEquals("user1", subject.getPrincipal());
@@ -212,6 +215,74 @@ public class DelegatingSubjectTest {
         assertFalse(subject.hasRole("role2"));
         assertFalse(subject.hasRole("role3"));
         assertNull(subject.getPreviousPrincipals()); //no previous principals in orig state
+
+        subject.logout();
+
+        LifecycleUtils.destroy(sm);
+    }
+
+    @Test
+    public void sessionAttributesSurviveLoginSessionRotation() {
+        Ini ini = new Ini();
+        Ini.Section users = ini.addSection("users");
+        users.put("user1", "user1,role1");
+        users.put("user2", "user2,role2");
+        users.put("user3", "user3,role3");
+        SecurityManager sm = new BasicIniEnvironment(ini).getSecurityManager();
+        Subject subject = new Subject.Builder(sm).buildSubject();
+
+        subject.login(new UsernamePasswordToken("user1", "user1"));
+        subject.logout();
+
+        Session preLoginSession = subject.getSession(true);
+        preLoginSession.setAttribute("tenantId", "ACME");
+        Serializable preLoginSessionId = preLoginSession.getId();
+
+        subject.login(new UsernamePasswordToken("user1", "user1"));
+        assertTrue(subject.isAuthenticated());
+
+        Session postLoginSession = subject.getSession(false);
+        assertNotNull(postLoginSession);
+
+        assertNotEquals("session ID should change on login (session fixation protection)",
+                preLoginSessionId, postLoginSession.getId());
+        assertEquals("session attributes set before login must survive session rotation",
+                "ACME", postLoginSession.getAttribute("tenantId"));
+
+        // an attacker holding the fixated (pre-login) session ID must not be able to ride the authenticated session
+        Subject attacker = new Subject.Builder(sm).sessionId(preLoginSessionId).buildSubject();
+        assertFalse("fixated session ID must not resolve to the authenticated subject", attacker.isAuthenticated());
+        assertNull("fixated session ID must not carry the authenticated principal", attacker.getPrincipal());
+
+        subject.logout();
+
+        LifecycleUtils.destroy(sm);
+    }
+
+    @Test
+    public void sessionIdRotatesOnReLoginOfAuthenticatedSubject() {
+        Ini ini = new Ini();
+        Ini.Section users = ini.addSection("users");
+        users.put("user1", "user1,role1");
+        users.put("user2", "user2,role2");
+        SecurityManager sm = new BasicIniEnvironment(ini).getSecurityManager();
+
+        Subject subject = new Subject.Builder(sm).buildSubject();
+        subject.login(new UsernamePasswordToken("user1", "user1"));
+        Serializable firstSessionId = subject.getSession().getId();
+
+        // logging in again (e.g. as a different user) over an existing session must rotate the session ID
+        subject.login(new UsernamePasswordToken("user2", "user2"));
+        assertTrue(subject.isAuthenticated());
+        assertEquals("user2", subject.getPrincipal());
+        Serializable secondSessionId = subject.getSession().getId();
+        assertNotEquals("session ID should change on re-login (session fixation protection)",
+                firstSessionId, secondSessionId);
+
+        // the previous session ID must no longer resolve to an authenticated subject
+        Subject attacker = new Subject.Builder(sm).sessionId(firstSessionId).buildSubject();
+        assertFalse(attacker.isAuthenticated());
+        assertNull(attacker.getPrincipal());
 
         subject.logout();
 
