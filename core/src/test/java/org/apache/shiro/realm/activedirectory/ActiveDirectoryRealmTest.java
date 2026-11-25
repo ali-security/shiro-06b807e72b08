@@ -123,6 +123,15 @@ public class ActiveDirectoryRealmTest {
         assertExistingUserSuffix(USERNAME + "@EXAMPLE.com", "testuser@EXAMPLE.com");
     }
 
+    @Test
+    public void testUsernameSpecialCharactersEscaped() throws Exception {
+        // injected DN components are escaped before the suffix is appended
+        assertExistingUserSuffix(USERNAME + ",ou=admins", "testuser\\,ou\\=admins@ExAmple.COM");
+        assertExistingUserSuffix(USERNAME + "+cn=admin", "testuser\\+cn\\=admin@ExAmple.COM");
+        // escaping is applied when the username already carries the suffix
+        assertExistingUserSuffix(USERNAME + ",ou=admins@example.com", "testuser\\,ou\\=admins@example.com");
+    }
+
     public void assertExistingUserSuffix(String username, String expectedPrincipalName) throws Exception {
 
         LdapContext ldapContext = createMock(LdapContext.class);
