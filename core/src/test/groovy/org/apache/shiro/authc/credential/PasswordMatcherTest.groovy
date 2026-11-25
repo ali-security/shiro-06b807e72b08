@@ -20,7 +20,10 @@ package org.apache.shiro.authc.credential
 
 import org.apache.shiro.authc.AuthenticationInfo
 import org.apache.shiro.authc.AuthenticationToken
+import org.apache.shiro.authc.SimpleAuthenticationInfo
+import org.apache.shiro.authc.UsernamePasswordToken
 import org.apache.shiro.crypto.hash.Sha256Hash
+import org.apache.shiro.crypto.hash.SimpleHash
 import org.junit.Test
 
 import static org.easymock.EasyMock.*
@@ -176,6 +179,28 @@ class PasswordMatcherTest {
 
         verify token, info, service
 
+    }
+
+    /**
+     * An account with an empty stored password must not be accessible with an empty submitted password.
+     */
+    @Test
+    void testEmptyStoredPasswordDoesNotMatchEmptySubmittedPassword() {
+        def matcher = new PasswordMatcher()
+
+        assertFalse matcher.doCredentialsMatch(new UsernamePasswordToken("user", ""),
+                new SimpleAuthenticationInfo("user", "", "realm"))
+        assertFalse matcher.doCredentialsMatch(new UsernamePasswordToken("user", ""),
+                new SimpleAuthenticationInfo("user", new char[0], "realm"))
+        assertFalse matcher.doCredentialsMatch(new UsernamePasswordToken("user", (char[]) null),
+                new SimpleAuthenticationInfo("user", "", "realm"))
+        assertFalse matcher.doCredentialsMatch(new UsernamePasswordToken("user", ""),
+                new SimpleAuthenticationInfo("user", new SimpleHash("SHA-256"), "realm"))
+
+        // a real stored password still matches
+        def stored = matcher.passwordService.encryptPassword("secret")
+        assertTrue matcher.doCredentialsMatch(new UsernamePasswordToken("user", "secret"),
+                new SimpleAuthenticationInfo("user", stored, "realm"))
     }
 
 }
